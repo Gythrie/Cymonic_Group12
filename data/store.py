@@ -11,6 +11,17 @@ DECISIONS_LOG_PATH = os.path.join(BASE_DIR, "decisions_log.csv")
 
 VALID_STATUSES = {"notified", "offer_sent"}  # "no_action" -> skip calling update_record() entirely
 
+__all__ = [
+    "get_context",
+    "update_record",
+    "list_scenarios",
+    "get_all_reservations",
+    "get_occupancy_trends",
+    "get_decision_history",
+]
+
+_TIER_PRIORITY = {"Gold": 0, "Silver": 1, "Regular": 2}
+
 
 def _parse_bool(value) -> bool:
     """Guard against pandas reading is_peak as the literal string 'False',
@@ -31,7 +42,11 @@ def list_scenarios() -> list[dict]:
         pct = round(100 * row["tables_occupied"] / row["total_tables"])
         peak_label = "PEAK" if _parse_bool(row["is_peak"]) else "off-peak"
         label = f"{row['date']} {row['time_slot']} — {pct}% full, {row['cancellations_count']} cancels, {peak_label}"
-        scenarios.append({"scenario_id": sid, "label": label})
+        scenarios.append({
+            "scenario_id": sid,
+            "id": sid,
+            "label": label
+        })
     return scenarios
 
 
@@ -48,14 +63,37 @@ def get_context(scenario_id: str) -> dict:
     candidates = res[(res["date"] == date_) & (res["time_slot"] == slot) & (res["status"] == "confirmed")]
 
     customers = pd.read_csv(CUSTOMERS_PATH)
+    cust_name = "Valued Guest"
+    cust_id = None
+    party_size = 2
+    table_id = "T01"
+
     if not candidates.empty:
-        cust_row = candidates.iloc[0]
-        cust = customers[customers["customer_id"] == cust_row["customer_id"]].iloc[0]
-        tier = cust["loyalty_tier"]
+        merged = candidates.merge(customers, on="customer_id", how="left")
+        merged["tier_rank"] = merged["loyalty_tier"].map(lambda t: _TIER_PRIORITY.get(t, 99))
+        sorted_candidates = merged.sort_values("tier_rank")
+        cust_row = sorted_candidates.iloc[0]
+        tier = cust_row["loyalty_tier"]
         cand_res_id = cust_row["reservation_id"]
+        cust_id = cust_row["customer_id"]
+        cust_name = cust_row.get("name", "Valued Guest")
+        party_size = int(cust_row.get("party_size", 2))
+        table_id = str(cust_row.get("table_id", "T01"))
     else:
-        tier = "Regular"
-        cand_res_id = None
+        # Fallback to any reservation in that slot if available
+        any_res = res[(res["date"] == date_) & (res["time_slot"] == slot)]
+        if not any_res.empty:
+            merged = any_res.merge(customers, on="customer_id", how="left")
+            cust_row = merged.iloc[0]
+            tier = cust_row.get("loyalty_tier", "Regular")
+            cand_res_id = cust_row["reservation_id"]
+            cust_id = cust_row["customer_id"]
+            cust_name = cust_row.get("name", "Valued Guest")
+            party_size = int(cust_row.get("party_size", 2))
+            table_id = str(cust_row.get("table_id", "T01"))
+        else:
+            tier = "Regular"
+            cand_res_id = None
 
     occupancy_pct = round(100 * row["tables_occupied"] / row["total_tables"])
 
@@ -66,6 +104,14 @@ def get_context(scenario_id: str) -> dict:
         "time_slot": slot,
         "customer_tier": tier,
         "candidate_reservation_id": cand_res_id,
+        # Contextual UI display fields
+        "scenario_id": scenario_id,
+        "reservation_id": cand_res_id or "RES-AUTO",
+        "customer_id": cust_id or "CUST-DEFAULT",
+        "customer_name": cust_name,
+        "party_size": party_size,
+        "table_id": table_id,
+        "date": date_
     }
 
 
@@ -93,6 +139,102 @@ def update_record(reservation_id: str, new_status: str, offer_text: str = None) 
         log_row.to_csv(DECISIONS_LOG_PATH, mode="a", header=False, index=False)
     else:
         log_row.to_csv(DECISIONS_LOG_PATH, index=False)
+
+
+def get_all_reservations() -> list[dict]:
+    """Returns joined reservation records with customer details for UI table display."""
+    if not os.path.exists(RESERVATIONS_PATH):
+        return []
+    res = pd.read_csv(RESERVATIONS_PATH)
+    cust = pd.read_csv(CUSTOMERS_PATH)
+    merged = res.merge(cust, on="customer_id", how="left")
+
+    # Read latest updates from decisions_log if available
+    decisions = {}
+    if os.path.exists(DECISIONS_LOG_PATH):
+        try:
+            d_df = pd.read_csv(DECISIONS_LOG_PATH)
+            for _, d_row in d_df.iterrows():
+                rid = str(d_row["reservation_id"])
+                ts = str(d_row.get("timestamp", ""))
+                time_part = ts.split("T")[-1] if "T" in ts else ts
+                decisions[rid] = {
+                    "updated_at": time_part[:8],
+                    "offer_text": str(d_row.get("offer_text", ""))
+                }
+        except Exception:
+            pass
+
+    records = []
+    for _, row in merged.iterrows():
+        rid = str(row["reservation_id"])
+        dec_info = decisions.get(rid, {})
+        records.append({
+            "reservation_id": rid,
+            "customer_id": str(row["customer_id"]),
+            "customer_name": str(row.get("name", "Unknown")),
+            "tier": str(row.get("loyalty_tier", "Regular")),
+            "time_slot": f"{row['date']} {row['time_slot']}",
+            "party_size": int(row["party_size"]),
+            "table_id": str(row["table_id"]),
+            "status": str(row["status"]),
+            "offer_text": dec_info.get("offer_text", None),
+            "updated_at": dec_info.get("updated_at", "Initial")
+        })
+    return records
+
+
+def get_occupancy_trends() -> list[dict]:
+    """Returns occupancy and cancellation metrics from occupancy_log.csv."""
+    if not os.path.exists(OCCUPANCY_PATH):
+        return []
+    occ = pd.read_csv(OCCUPANCY_PATH)
+    trends = []
+    # Display the most recent or upcoming slots
+    sample_occ = occ.head(10)
+    for _, row in sample_occ.iterrows():
+        pct = round(100 * row["tables_occupied"] / row["total_tables"])
+        slot_label = f"{row['date'][-5:]} {row['time_slot']}"
+        trends.append({
+            "slot": slot_label,
+            "occupancy": int(pct),
+            "cancellations": int(row["cancellations_count"]),
+            "is_peak": _parse_bool(row["is_peak"])
+        })
+    return trends
+
+
+def get_decision_history() -> list[dict]:
+    """Returns past decision audit logs from decisions_log.csv."""
+    if not os.path.exists(DECISIONS_LOG_PATH):
+        return []
+    try:
+        d_df = pd.read_csv(DECISIONS_LOG_PATH)
+        if d_df.empty:
+            return []
+        res = pd.read_csv(RESERVATIONS_PATH)
+        cust = pd.read_csv(CUSTOMERS_PATH)
+        m = res.merge(cust, on="customer_id", how="left")
+        info_map = {str(row["reservation_id"]): row for _, row in m.iterrows()}
+
+        history = []
+        for _, row in d_df.iterrows():
+            rid = str(row["reservation_id"])
+            minfo = info_map.get(rid, {})
+            ts = str(row.get("timestamp", ""))
+            time_part = ts.split("T")[-1] if "T" in ts else ts
+            history.insert(0, {
+                "Timestamp": time_part[:8],
+                "Scenario": rid,
+                "Slot": str(minfo.get("time_slot", "N/A")),
+                "Customer": str(minfo.get("name", "Guest")),
+                "Tier": str(minfo.get("loyalty_tier", "Regular")),
+                "Decision": str(row.get("decision", "")).upper(),
+                "Status": str(row.get("decision", "")).upper()
+            })
+        return history
+    except Exception:
+        return []
 
 
 if __name__ == "__main__":

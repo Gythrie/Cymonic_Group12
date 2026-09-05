@@ -1,11 +1,11 @@
 """
 Restaurant Reservation Concierge - Main Streamlit Application.
-Frontend Lead (Member 3) Implementation.
+Conforms strictly to CONTRACT.md.
 
-Provides an enterprise-grade AI Concierge with:
-1. Executive Login Authentication Gateway (Admin access).
-2. Autonomous dynamic yield optimization & reservation concierge.
-3. Teammate zero-configuration auto-plugging (Member 1 data/store.py & Member 2 agent/reasoning.py).
+Fully integrated live monolith:
+- Data Layer: data.store (customers.csv, reservations.csv, occupancy_log.csv, decisions_log.csv)
+- Reasoning Agent: agent.reasoning (Gemini LLM reasoning with pure Python rule fallback)
+- Presentation: ui.components and ui.styles
 """
 
 import streamlit as st
@@ -20,27 +20,136 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Dynamic Adapter: Auto-detect teammates' modules if present
-HAS_REAL_DATA = False
-HAS_REAL_AGENT = False
+import os
+import importlib
+import pandas as pd
+
+# Live Data and Agent modules with hot-reload support
+import data.store
+import agent.reasoning
 
 try:
-    from data.store import get_context as real_get_context
-    from data.store import update_record as real_update_record
-    from data.store import list_scenarios as real_list_scenarios
-    from data.store import get_all_reservations as real_get_all_reservations
-    HAS_REAL_DATA = True
-except ImportError:
+    importlib.reload(data.store)
+except Exception:
     pass
 
 try:
-    from agent.reasoning import run_concierge as real_run_concierge
-    HAS_REAL_AGENT = True
-except ImportError:
+    importlib.reload(agent.reasoning)
+except Exception:
     pass
 
-# Import mock backend fallbacks conforming to CONTRACT.md
-import ui.mock_backend as mock_backend
+get_context = data.store.get_context
+update_record = data.store.update_record
+list_scenarios = data.store.list_scenarios
+
+# Direct CSV loader fallbacks in case an older data.store module is cached in memory
+def _fallback_get_all_reservations() -> list[dict]:
+    base_dir = os.path.join(os.path.dirname(__file__), "data")
+    res_path = os.path.join(base_dir, "reservations.csv")
+    cust_path = os.path.join(base_dir, "customers.csv")
+    dec_path = os.path.join(base_dir, "decisions_log.csv")
+    if not os.path.exists(res_path):
+        return []
+    res = pd.read_csv(res_path)
+    cust = pd.read_csv(cust_path)
+    merged = res.merge(cust, on="customer_id", how="left")
+
+    decisions = {}
+    if os.path.exists(dec_path):
+        try:
+            d_df = pd.read_csv(dec_path)
+            for _, d_row in d_df.iterrows():
+                rid = str(d_row["reservation_id"])
+                ts = str(d_row.get("timestamp", ""))
+                time_part = ts.split("T")[-1] if "T" in ts else ts
+                decisions[rid] = {
+                    "updated_at": time_part[:8],
+                    "offer_text": str(d_row.get("offer_text", ""))
+                }
+        except Exception:
+            pass
+
+    records = []
+    for _, row in merged.iterrows():
+        rid = str(row["reservation_id"])
+        dec_info = decisions.get(rid, {})
+        records.append({
+            "reservation_id": rid,
+            "customer_id": str(row["customer_id"]),
+            "customer_name": str(row.get("name", "Unknown")),
+            "tier": str(row.get("loyalty_tier", "Regular")),
+            "time_slot": f"{row['date']} {row['time_slot']}",
+            "party_size": int(row["party_size"]),
+            "table_id": str(row["table_id"]),
+            "status": str(row["status"]),
+            "offer_text": dec_info.get("offer_text", None),
+            "updated_at": dec_info.get("updated_at", "Initial")
+        })
+    return records
+
+
+def _fallback_get_occupancy_trends() -> list[dict]:
+    base_dir = os.path.join(os.path.dirname(__file__), "data")
+    occ_path = os.path.join(base_dir, "occupancy_log.csv")
+    if not os.path.exists(occ_path):
+        return []
+    occ = pd.read_csv(occ_path)
+    trends = []
+    sample_occ = occ.head(10)
+    for _, row in sample_occ.iterrows():
+        pct = round(100 * row["tables_occupied"] / row["total_tables"])
+        slot_label = f"{row['date'][-5:]} {row['time_slot']}"
+        trends.append({
+            "slot": slot_label,
+            "occupancy": int(pct),
+            "cancellations": int(row["cancellations_count"]),
+            "is_peak": str(row["is_peak"]).strip().lower() in ("true", "1", "yes")
+        })
+    return trends
+
+
+def _fallback_get_decision_history() -> list[dict]:
+    base_dir = os.path.join(os.path.dirname(__file__), "data")
+    dec_path = os.path.join(base_dir, "decisions_log.csv")
+    res_path = os.path.join(base_dir, "reservations.csv")
+    cust_path = os.path.join(base_dir, "customers.csv")
+    if not os.path.exists(dec_path):
+        return []
+    try:
+        d_df = pd.read_csv(dec_path)
+        if d_df.empty:
+            return []
+        res = pd.read_csv(res_path)
+        cust = pd.read_csv(cust_path)
+        m = res.merge(cust, on="customer_id", how="left")
+        info_map = {str(row["reservation_id"]): row for _, row in m.iterrows()}
+
+        history = []
+        for _, row in d_df.iterrows():
+            rid = str(row["reservation_id"])
+            minfo = info_map.get(rid, {})
+            ts = str(row.get("timestamp", ""))
+            time_part = ts.split("T")[-1] if "T" in ts else ts
+            history.insert(0, {
+                "Timestamp": time_part[:8],
+                "Scenario": rid,
+                "Slot": str(minfo.get("time_slot", "N/A")),
+                "Customer": str(minfo.get("name", "Guest")),
+                "Tier": str(minfo.get("loyalty_tier", "Regular")),
+                "Decision": str(row.get("decision", "")).upper(),
+                "Status": str(row.get("decision", "")).upper()
+            })
+        return history
+    except Exception:
+        return []
+
+
+get_all_reservations = getattr(data.store, "get_all_reservations", _fallback_get_all_reservations)
+get_occupancy_trends = getattr(data.store, "get_occupancy_trends", _fallback_get_occupancy_trends)
+get_decision_history = getattr(data.store, "get_decision_history", _fallback_get_decision_history)
+run_concierge = getattr(agent.reasoning, "run_concierge")
+
+
 from ui.components import (
     inject_styles,
     render_login_page,
@@ -66,10 +175,10 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 if "reservations" not in st.session_state:
-    st.session_state.reservations = mock_backend.get_all_reservations()
+    st.session_state.reservations = get_all_reservations()
 
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = get_decision_history()
 
 if "last_decision" not in st.session_state:
     st.session_state.last_decision = None
@@ -84,7 +193,6 @@ if "auto_pilot" not in st.session_state:
     st.session_state.auto_pilot = False
 
 # ----------------- AUTHENTICATION GATEWAY -----------------
-# Ensure the login page is the first page to be opened
 if not st.session_state.authenticated:
     render_login_page()
     st.stop()
@@ -109,19 +217,8 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # Mode indicator
-    if HAS_REAL_DATA and HAS_REAL_AGENT:
-        active_mode = "Live Integrated Stack (M1 + M2 + M3)"
-        st.success("Full Backend Connected")
-    elif HAS_REAL_AGENT:
-        active_mode = "Live Agent + Mock Dataset"
-        st.info("Live LLM Agent Active")
-    elif HAS_REAL_DATA:
-        active_mode = "Live Dataset + Mock Agent"
-        st.info("Live Dataset Active")
-    else:
-        active_mode = "Contract Mock Mode (Standalone)"
-        st.caption("Ready for Teammate Integration")
+    active_mode = "Live Integrated Stack (data.store + agent.reasoning)"
+    st.success("Full Real Backend & Agent Connected")
 
     st.markdown("---")
     st.subheader("Autonomous Agent Settings")
@@ -133,21 +230,21 @@ with st.sidebar:
     st.session_state.auto_pilot = auto_pilot_toggle
     
     st.markdown("---")
-    st.subheader("Hackathon Team Status")
-    st.markdown(f"""
-    - **M1 (Data Layer):** {'Ready' if HAS_REAL_DATA else 'Mock Active'}
-    - **M2 (Reasoning Agent):** {'Ready' if HAS_REAL_AGENT else 'Mock Active'}
-    - **M3 (Frontend UI):** **Complete & Autonomous**
-    - **M4 (Integration/QA):** **Auto-Plugging Ready**
+    st.subheader("System Architecture")
+    st.markdown("""
+    - **M1 (Data Layer):** **Active** (`data/store.py` + CSVs)
+    - **M2 (Reasoning Agent):** **Active** (`agent/reasoning.py`)
+    - **M3 (Frontend UI):** **Active** (`ui/components.py`)
+    - **M4 (Integration):** **Fully Integrated**
     """)
     
     st.markdown("---")
-    if st.button("Reset Session & Dataset", use_container_width=True):
-        st.session_state.reservations = mock_backend.get_all_reservations()
-        st.session_state.history = []
+    if st.button("Reload Dataset from Disk", use_container_width=True):
+        st.session_state.reservations = get_all_reservations()
+        st.session_state.history = get_decision_history()
         st.session_state.last_decision = None
         st.session_state.last_context = None
-        st.session_state.status_notification = "Session and dataset reset to initial state."
+        st.session_state.status_notification = "Reloaded fresh dataset records and audit log from disk."
         st.rerun()
 
 # ----------------- MAIN DASHBOARD VIEW -----------------
@@ -160,33 +257,36 @@ if st.session_state.status_notification:
 # 1. SCENARIO SELECTION & SIMULATOR
 st.subheader("Scenario Selector & Dynamic Simulator")
 
-# Load scenarios
-scenarios = real_list_scenarios() if HAS_REAL_DATA else mock_backend.list_scenarios()
+# Load real scenarios from data.store
+scenarios = list_scenarios()
 scenario_labels = [s["label"] for s in scenarios]
 scenario_labels.append("Custom Scenario Simulator (Judge Sandbox)")
 
-col_sel, col_mode = st.columns([3, 1])
+col_sel, _ = st.columns([3, 1])
 
 with col_sel:
+    default_idx = 2 if len(scenario_labels) > 2 else 0
     selected_option = st.selectbox(
-        "Select an operational scenario to evaluate:",
+        "Select an operational scenario from occupancy_log.csv to evaluate:",
         options=scenario_labels,
-        index=1  # Default to Scenario 2 for strong demo impact
+        index=default_idx
     )
 
 is_custom = selected_option.startswith("Custom Scenario Simulator")
 
 if not is_custom:
     selected_scenario = next(s for s in scenarios if s["label"] == selected_option)
-    scenario_id = selected_scenario["id"]
+    scenario_id = selected_scenario.get("scenario_id") or selected_scenario.get("id")
     
-    # Retrieve context
-    if HAS_REAL_DATA:
-        active_context = real_get_context(scenario_id)
-    else:
-        active_context = mock_backend.get_context(scenario_id)
+    active_context = get_context(scenario_id)
+    cand_id = active_context.get("candidate_reservation_id")
+    cust_name = active_context.get("customer_name", "Valued Diner")
+    tier = active_context.get("customer_tier", "Regular")
     
-    st.caption(f"**Scenario Context:** {selected_scenario.get('description', '')}")
+    st.caption(
+        f"**Active Operational Slot:** `{scenario_id}` | "
+        f"**Target Candidate:** `{cand_id or 'None'}` ({cust_name} - {tier} Tier)"
+    )
 else:
     st.markdown("##### Sandbox Parameters (Tweak and evaluate how the agent dynamically responds):")
     sim_c1, sim_c2, sim_c3 = st.columns(3)
@@ -194,7 +294,7 @@ else:
         custom_occupancy = st.slider("Current Occupancy %", min_value=10, max_value=100, value=35, step=5)
         custom_cancellations = st.number_input("Recent Cancellations Count", min_value=0, max_value=10, value=4)
     with sim_c2:
-        custom_slot = st.selectbox("Dining Time Slot", ["12:00 PM", "01:00 PM", "02:30 PM", "05:30 PM", "07:00 PM", "08:00 PM", "09:30 PM"], index=3)
+        custom_slot = st.selectbox("Dining Time Slot", ["12:00", "13:00", "18:00", "19:00", "20:00", "21:00"], index=2)
         custom_is_peak = st.checkbox("Peak Dining Window", value=False)
     with sim_c3:
         custom_tier = st.selectbox("Target Customer Loyalty Tier", ["Gold", "Silver", "Regular"], index=0)
@@ -209,11 +309,11 @@ else:
         "customer_id": "CUST-SANDBOX",
         "customer_name": "Valued Sandbox Guest",
         "customer_tier": custom_tier,
+        "candidate_reservation_id": None,
         "reservation_id": "RES-SANDBOX",
-        "table_id": "T-09",
+        "table_id": "T09",
         "party_size": custom_party,
-        "last_visit_days_ago": 14,
-        "lifetime_spend": "$1,200"
+        "date": datetime.now().strftime("%Y-%m-%d")
     }
 
 # Render KPI overview for the selected context
@@ -223,7 +323,6 @@ render_kpi_cards(active_context, st.session_state.last_decision)
 run_agent = False
 
 if st.session_state.auto_pilot:
-    # Auto-pilot triggers if context changed
     if st.session_state.last_context != active_context:
         run_agent = True
 else:
@@ -237,38 +336,36 @@ else:
 
 if run_agent:
     with st.spinner("Concierge Agent reasoning over table yield and brand economics..."):
-        # Brief natural delay for demonstration feel
-        time.sleep(0.4)
+        time.sleep(0.3)
         
-        # Call agent function (Member 2 or Mock)
-        if HAS_REAL_AGENT:
-            decision_result = real_run_concierge(active_context)
-        else:
-            decision_result = mock_backend.run_concierge(active_context)
+        # Call the live agent module
+        decision_result = run_concierge(active_context)
 
         st.session_state.last_decision = decision_result
         st.session_state.last_context = active_context
 
-        # Automatically update dataset
-        res_id = active_context.get("reservation_id", "RES-AUTO")
-        new_status = "offer_sent" if decision_result.get("decision") != "notify" else "notified"
+        # Determine new status per CONTRACT.md
+        decision = decision_result.get("decision", "notify")
+        new_status = "offer_sent" if decision != "notify" else "notified"
         
-        if HAS_REAL_DATA:
-            real_update_record(res_id, new_status, decision_result.get("offer"))
-            st.session_state.reservations = real_get_all_reservations()
-        else:
-            updated_record = mock_backend.update_record(res_id, new_status, decision_result.get("offer"))
-            # Update in-session list
-            st.session_state.reservations = mock_backend.get_all_reservations()
+        target_res_id = active_context.get("candidate_reservation_id") or active_context.get("reservation_id")
+        
+        # Persist update to reservations.csv and decisions_log.csv
+        if target_res_id and not is_custom:
+            try:
+                update_record(target_res_id, new_status, decision_result.get("offer"))
+                st.session_state.reservations = get_all_reservations()
+            except Exception as exc:
+                st.warning(f"Could not write reservation update: {exc}")
 
-        # Log to session history
+        # Record in session history
         st.session_state.history.insert(0, {
             "Timestamp": datetime.now().strftime("%H:%M:%S"),
-            "Scenario": active_context.get("scenario_id", "Manual"),
+            "Scenario": active_context.get("scenario_id", "Custom"),
             "Slot": active_context.get("time_slot"),
-            "Customer": active_context.get("customer_name"),
-            "Tier": active_context.get("customer_tier"),
-            "Decision": decision_result.get("decision").upper(),
+            "Customer": active_context.get("customer_name", "Guest"),
+            "Tier": active_context.get("customer_tier", "Regular"),
+            "Decision": decision.upper(),
             "Status": new_status.upper()
         })
 
@@ -277,11 +374,13 @@ if st.session_state.last_decision:
     st.markdown("---")
     render_decision_display(st.session_state.last_decision, active_context)
     
-    # Manager action approval
-    res_id = active_context.get("reservation_id", "RES-AUTO")
+    target_res_id = active_context.get("candidate_reservation_id") or active_context.get("reservation_id")
     c_m1, c_m2 = st.columns([3, 1])
     with c_m1:
-        st.caption(f"Record `{res_id}` synchronized to reservations dataset with status `{new_status if run_agent else 'logged'}`.")
+        if target_res_id and not is_custom:
+            st.caption(f"Record `{target_res_id}` synchronized to `reservations.csv` and logged to `decisions_log.csv`.")
+        else:
+            st.caption("Simulation decision calculated in sandbox mode.")
     with c_m2:
         if st.button("Re-evaluate Strategy"):
             st.session_state.last_decision = None
@@ -292,11 +391,12 @@ st.markdown("---")
 tab_charts, tab_dataset, tab_history = st.tabs(["Occupancy & Cancellations", "Dataset Records", "Audit History"])
 
 with tab_charts:
-    trends_data = mock_backend.get_occupancy_trends()
-    render_occupancy_chart(trends_data, active_context.get("time_slot", "20:00"))
+    trends_data = get_occupancy_trends()
+    render_occupancy_chart(trends_data, active_context.get("time_slot", "18:00"))
 
 with tab_dataset:
-    render_reservation_records_table(st.session_state.reservations, active_context.get("reservation_id"))
+    active_cand_id = active_context.get("candidate_reservation_id") or active_context.get("reservation_id")
+    render_reservation_records_table(st.session_state.reservations, active_cand_id)
 
 with tab_history:
     render_decision_history(st.session_state.history)

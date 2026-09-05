@@ -10,9 +10,11 @@ import os
 import json
 import requests
 
-from prompts import build_prompt
+try:
+    from agent.prompts import build_prompt
+except ImportError:
+    from prompts import build_prompt
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-2.5-flash:generateContent"
@@ -20,6 +22,35 @@ GEMINI_URL = (
 
 # Keep the request tight — we don't need a long response, just one JSON object
 REQUEST_TIMEOUT_SECONDS = 8
+
+
+def _get_api_key() -> str | None:
+    """Retrieve API key from environment variables or .env file if available."""
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("LLM_API_KEY")
+    if key:
+        return key.strip()
+    
+    # Check for .env file in project root or current working dir
+    env_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),
+        os.path.join(os.getcwd(), ".env")
+    ]
+    for env_path in env_paths:
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip("'\"")
+                        if k in ("GEMINI_API_KEY", "LLM_API_KEY") and v:
+                            os.environ[k] = v
+                            return v
+            except Exception:
+                pass
+    return None
 
 
 class LLMCallError(Exception):
@@ -38,8 +69,9 @@ def call_llm(context: dict) -> dict:
     Raises LLMCallError if anything goes wrong, so the caller can fall
     back to fallback_rules.fallback_score() without crashing the app.
     """
-    if not GEMINI_API_KEY:
-        raise LLMCallError("Missing GEMINI_API_KEY environment variable")
+    api_key = _get_api_key()
+    if not api_key:
+        raise LLMCallError("Missing GEMINI_API_KEY or LLM_API_KEY environment variable")
 
     prompt = build_prompt(context)
 
@@ -53,7 +85,7 @@ def call_llm(context: dict) -> dict:
 
     try:
         response = requests.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+            f"{GEMINI_URL}?key={api_key}",
             json=payload,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )

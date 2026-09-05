@@ -1,2 +1,15 @@
 reservation_id,timestamp,decision,offer_text
 R0001,2026-09-05T11:32:21,notified,Test offer for verification
+R9003,2026-09-05T14:05:26,offer_sent,"Hi David Castillo! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0007,2026-09-05T14:07:05,offer_sent,"Hi David Castillo! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0056,2026-09-05T14:07:30,notified,Hi David Castillo! A table has just become available for your requested time slot. We'd love to welcome you — please confirm your reservation at your earliest convenience.
+R0017,2026-09-05T14:08:45,offer_sent,"Hi Andrea Porter! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0014,2026-09-05T14:14:38,notified,Hi David Castillo! A table has just become available for your requested time slot. We'd love to welcome you — please confirm your reservation at your earliest convenience.
+R0083,2026-09-05T14:14:58,notified,Hi David Lozano! A table has just become available for your requested time slot. We'd love to welcome you — please confirm your reservation at your earliest convenience.
+R0084,2026-09-05T14:15:02,notified,Hi Kevin Perez! A table has just become available for your requested time slot. We'd love to welcome you — please confirm your reservation at your earliest convenience.
+R0007,2026-09-05T14:24:42,offer_sent,"Hi David Castillo! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0098,2026-09-05T14:25:18,offer_sent,"Hi Michael Davis! We have a great table available for you. As a thank-you for your loyalty, enjoy a complimentary welcome drink on us tonight."
+R0063,2026-09-05T14:42:05,offer_sent,"Hi David Lozano! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0062,2026-09-05T14:42:09,offer_sent,"Hi David Lozano! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0091,2026-09-05T14:42:53,offer_sent,"Hi Andrea Porter! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
+R0090,2026-09-05T14:42:56,offer_sent,"Hi Kenneth King! A prime table has opened up and we'd love to have you join us. As our valued guest, please enjoy a complimentary dessert AND 15 % off your bill as a special thank-you for your continued loyalty."
